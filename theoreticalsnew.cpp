@@ -36,7 +36,7 @@ double potential(double r, double M500, double R500, double g500, double c500) {
     return -g500*(G*M500/R500)*(log(1+c500*r)/r);
 }
 
-// surface density: Simpson rule
+// integrali: Simpson rule
 double simpson(std::function<double(double)> f, double a, double b, int N) {
     if (N % 2 != 0) N++; // Simpson vuole N pari
     double h = (b - a) / N;
@@ -77,6 +77,14 @@ double delta(double x_perp, double R500_SI, double sigma, double phi0, double ph
         return (phi0-phi)*rho*x;
     };
     return simpson(integrand1, 0.0, M_PI/2.0, N)*((2*R500_SI)/(c*sigma));
+}
+
+//calcolo del velocity offset per una popolazione di cluster
+double delta_pop_numerator(double M, double alpha, double Delta, double Sigma, double delta_M) {
+    return pow(M, alpha)*Delta*Sigma*delta_M;
+}
+double delta_pop_denominator(double M, double alpha, double Sigma, double delta_M) {
+    return pow(M, alpha)*Sigma*delta_M;
 }
 
 int main() {
@@ -163,12 +171,14 @@ int main() {
         double x_perp = r_tilde[i];
         double delta_val = delta(x_perp, R500_SI, Sigma[i], phi[0], phi[i], NFW[i]);
         fout1 << x_perp << "   " << delta_val/1000 << "\n";   //il /1000 converte in Km/s
-        Delta[i] = delta_val/1000;
+        Delta[i] = delta_val;
     }
 
     fout1.close();
     
-    
-    
+    //calcolo il velocity offset per una popolazione di cluster
+   
+
+
     return 0;
 }
