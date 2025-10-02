@@ -7,13 +7,13 @@
 #define M_PI 3.14159265358979323846
 #endif
 
-// Costanti fisiche
+// Costanti
 const double G = 6.674e-11;               // [m^3 kg^-1 s^-2]
 const double M_sun = 1.989e30;            // [kg]
 const double Mpc = 3.086e22;              // [m]
 const double c = 3*pow(10, 8);            // [m/s]
 
-// Densità critica a redshift z (approssimazione flat ΛCDM con solo H0)
+// Densità critica
 double rho_crit(double H0) {
     double H0_SI = H0 * 1e3 / Mpc;   // km/s/Mpc -> s^-1
     return 3 * H0_SI * H0_SI / (8 * M_PI * G);  // [kg/m^3]
@@ -27,13 +27,14 @@ double c500_duffy(double M500, double z) {
 }
 
 // Profilo densità NFW
-double rho_NFW(double r, double rho_s, double r_s) {
-    return rho_s / ((r / r_s) * pow(1 + r / r_s, 2));
+double rho_NFW(double x, double R500_SI, double M500_SI, double c500, double g500) {
+    //return rho_s / ((r / r_s) * pow(1 + r / r_s, 2));
+    return (M500_SI*pow(c500, 2)*g500)/(4*M_PI*pow(R500_SI, 3)*x*pow(1+c500*x, 2));
 }
 
 // Potenziale
-double potential(double r, double M500, double R500, double g500, double c500) {
-    return -g500*(G*M500/R500)*(log(1+c500*r)/r);
+double potential(double x, double M500, double R500, double g500, double c500) {
+    return -g500*(G*M500/R500)*(log(1+c500*x)/x);
 }
 
 // integrali: Simpson rule
@@ -69,23 +70,26 @@ double sigma(double x_perp, double rho_s, double R500_SI) {
 }
 
 //calcolo del velocity offset per un singolo cluster
-double delta(double x_perp, double R500_SI, double sigma, double phi0, double phi, double rho, int N=1000) {
-        auto integrand1 = [&](double theta) {
-        double cos_t = std::cos(theta);
-        if (cos_t <= 1e-14) return 0.0;
-        double x = x_perp / cos_t;
-        return (phi0-phi)*rho*x;
-    };
-    return simpson(integrand1, 0.0, M_PI/2.0, N)*((2*R500_SI)/(c*sigma));
-}
+double delta(double x_perp, double R500_SI, double r_s_SI, double phi0, double rho_s, double r_s, double M500_SI, double c500, int Ntheta=50000) {
+    auto integrand1 = [&](double theta) {
+    double cos_t = std::cos(theta);
+    if (cos_t < 1e-14) return 0.0;
 
-//calcolo del velocity offset per una popolazione di cluster
-double delta_pop_numerator(double M, double alpha, double Delta, double Sigma, double delta_M) {
-    return pow(M, alpha)*Delta*Sigma*delta_M;
-}
-double delta_pop_denominator(double M, double alpha, double Sigma, double delta_M) {
-    return pow(M, alpha)*Sigma*delta_M;
-}
+    double x = x_perp / cos_t;       // r lungo la LOS, in unità R500
+    double r_perp = x_perp * R500_SI; // proiezione [m]
+    //double r_si = x * R500_SI;       // fisico [m]
+    double f_c = std::log(1 + c500) - c500/(1 + c500);
+    double rho_r = rho_NFW(x, R500_SI, M500_SI, c500, 1/f_c); // kg/m^3
+    double phi_r = potential(x, M500_SI, R500_SI, 1/(f_c), c500); // m²/s²
+    return rho_r * (phi0 - phi_r) * (x_perp / (cos_t*cos_t)); // adimensionale dx/dtheta
+    };
+double Sigma = sigma(x_perp, rho_s, R500_SI); // kg/m^2
+double integral = simpson(integrand1, 0.0, M_PI/2, Ntheta);
+return (2.0 * R500_SI/ (c*Sigma)) * integral; // m/s
+
+};
+
+
 
 int main() {
     int N = 1000;
@@ -125,26 +129,28 @@ int main() {
 
     //creo una griglia
     double r[N];
-    double delta_r = 3.0/1000.0;
+    double delta_r = 3.0/N;
     for (int i=0; i<N-1; i++) {
         r[i+1]=r[i]+delta_r;
     };
 
     //calcolo NFW
     double NFW[N];
-    double r_tilde[N];
+    double r_tilde[N]; 
+    double g500 = pow(log(1+c500)-(c500/(1+c500)), -1);
     for (int i=1; i<N-1; i++) {
         r_tilde[i] = r[i]/R500;
-        NFW[i] = rho_NFW(r[i] * Mpc, rho_s, r_s_SI);
+        NFW[i] = rho_NFW(r_tilde[i], R500_SI, M500_SI, c500, g500);
     }
 
-    double g500 = pow(log(1+c500)-(c500/(1+c500)), -1);
-    double phi[1000];
+   
+    double phi[N];
     phi[0] = -g500*c500*G*M500_SI/R500_SI;
 
     // calcolo il potenziale
     for (int i=1; i<N-1; i++) {
         phi[i] = potential (r_tilde[i], M500_SI, R500_SI, g500, c500);
+        //std::cout << phi[0]-phi[i] << "\n";
     }
 
     //calcolo la surface density
@@ -166,19 +172,18 @@ int main() {
     fout1 << "x_perp,Delta\n";
 
     double Delta[N];
-    Delta[0] = 0;
-    for (int i=1; i<N-1; i++) {
+    
+    for (int i=0; i<N-1; i++) {
         double x_perp = r_tilde[i];
-        double delta_val = delta(x_perp, R500_SI, Sigma[i], phi[0], phi[i], NFW[i]);
+        double delta_val = delta(x_perp, R500_SI, r_s_SI, phi[0], rho_s, r_s, M500_SI, c500);
         fout1 << x_perp << "   " << delta_val/1000 << "\n";   //il /1000 converte in Km/s
         Delta[i] = delta_val;
+        Delta[0] = 0;
     }
 
     fout1.close();
     
     //calcolo il velocity offset per una popolazione di cluster
    
-
-
     return 0;
 }
