@@ -1,7 +1,9 @@
 #include <iostream>
 #include <cmath>
 #include <fstream>
-#include <functional>
+#include "Func.h"
+#include "GSLwrapper.h"
+using namespace cbl;
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -37,58 +39,78 @@ double potential(double x, double M500, double R500, double g500, double c500) {
     return -g500*(G*M500/R500)*(log(1+c500*x)/x);
 }
 
-// integrali: Simpson rule
-double simpson(std::function<double(double)> f, double a, double b, int N) {
-    if (N % 2 != 0) N++; // Simpson vuole N pari
-    double h = (b - a) / N;
-    double sum = f(a) + f(b);
-    for (int k = 1; k < N; k++) {
-        double x = a + k * h;
-        sum += (k % 2 == 0 ? 2.0 : 4.0) * f(x);
-    }
-    return sum * h / 3.0;
-}
+// Sigma tilde (adimensionale) usando integrazione lungo x
+double Sigma_tilde_x(double x_perp, double c500, double R500_SI, double M500_SI, int Ntheta = 1000)
+{
+    double g500 = 1.0 / (std::log(1 + c500) - c500 / (1 + c500));
 
-// ========================
-//   Sigma tilde (adim.)
-// ========================
-// x_perp = r_perp / R500
-double Sigma_tilde(double x_perp, int N = 1000) {
-    auto integrand = [&](double theta) {
-        double cos_t = std::cos(theta);
-        if (cos_t <= 1e-14) return 0.0;
-        double x = x_perp / cos_t;
-        return x_perp / ( (1.0 + x) * (1.0 + x) * cos_t * cos_t );
+    // massimo raggio di integrazione (adimensionale)
+    double x_max = 100.0; 
+
+    auto integrand = [&](double x) -> double {
+        if (x <= x_perp) return 0.0; // evita radice negativa
+        double rho_r = (M500_SI * std::pow(c500, 2) * g500) /
+                       (4.0 * M_PI * std::pow(R500_SI, 3) * x * std::pow(1 + c500 * x, 2));
+        double jac = x / std::sqrt(x*x - x_perp*x_perp); // dx/dtheta equivalente
+        return rho_r * jac;
     };
-    return simpson(integrand, 0.0, M_PI/2.0, N);
+
+    double epsabs = 1e-6;
+    double epsrel = 1e-6;
+    int limit_size = 5000;
+    int rule = 6; // GSL_INTEG_GAUSS61
+
+    double integral = wrapper::gsl::GSL_integrate_qag(
+        integrand, x_perp, x_max, epsabs, epsrel, limit_size, rule
+    );
+
+    return 2.0 * integral; // fattore 2 per simmetria sopra e sotto il piano del cielo
 }
 
-
-// Sigma fisico: restituisce kg/m^2 se rho_s è in kg/m^3 e R500 in m
-double sigma(double x_perp, double rho_s, double R500_SI) {
-    return 2.0 * R500_SI * rho_s * Sigma_tilde(x_perp);
+// Sigma fisico
+double sigma(double x_perp, double rho_s, double c500, double R500_SI, double M500_SI)
+{
+    return Sigma_tilde_x(x_perp, c500, R500_SI, M500_SI) * 1.0; // kg/m^2 già incluso in rho_r
 }
+
 
 //calcolo del velocity offset per un singolo cluster
-double delta(double x_perp, double R500_SI, double r_s_SI, double phi0, double rho_s, double r_s, double M500_SI, double c500, int Ntheta=50000) {
-    auto integrand1 = [&](double theta) {
-    double cos_t = std::cos(theta);
-    if (cos_t < 1e-14) return 0.0;
+double delta(double x_perp, double R500_SI, double phi0,
+             double rho_s, double M500_SI, double c500)
+{
+    // g500 per NFW
+    double g500 = 1.0 / (std::log(1 + c500) - c500 / (1 + c500));
 
-    double x = x_perp / cos_t;       // r lungo la LOS, in unità R500
-    double r_perp = x_perp * R500_SI; // proiezione [m]
-    //double r_si = x * R500_SI;       // fisico [m]
-    double f_c = std::log(1 + c500) - c500/(1 + c500);
-    double rho_r = rho_NFW(x, R500_SI, M500_SI, c500, 1/f_c); // kg/m^3
-    double phi_r = potential(x, M500_SI, R500_SI, 1/(f_c), c500); // m²/s²
-    return rho_r * (phi0 - phi_r) * (x_perp / (cos_t*cos_t)); // adimensionale dx/dtheta
+    // integratore adattivo lungo x: da x_perp a un massimo (es. 100 R500)
+    double x_max = 100.0; // adimensionale, puoi aumentare se serve
+    auto integrand = [&](double x) -> double {
+        if (x <= x_perp) return 0.0; // evita radice negativa
+        double rho_r = (M500_SI * std::pow(c500, 2) * g500) /
+                       (4.0 * M_PI * std::pow(R500_SI, 3) * x * std::pow(1 + c500 * x, 2));
+        double phi_r = -g500 * (G * M500_SI / R500_SI) * (std::log(1 + c500 * x) / x);
+
+        // jacobiano della trasformazione dx/dtheta = x / sqrt(x^2 - x_perp^2)
+        double jac = x / std::sqrt(x*x - x_perp*x_perp);
+
+        return rho_r * (phi0 - phi_r) * jac;
     };
-double Sigma = sigma(x_perp, rho_s, R500_SI); // kg/m^2
-double integral = simpson(integrand1, 0.0, M_PI/2, Ntheta);
-return (2.0 * R500_SI/ (c*Sigma)) * integral; // m/s
 
-};
+    // Parametri GSL
+    double epsabs = 1e-6;
+    double epsrel = 1e-6;
+    int limit_size = 5000;
+    int rule = 6; // GSL_INTEG_GAUSS61
 
+    // integrazione
+    double integral = wrapper::gsl::GSL_integrate_qag(
+        integrand, x_perp, x_max, epsabs, epsrel, limit_size, rule
+    );
+
+    // Surface density Σ(x⊥)
+    double Sigma = sigma(x_perp, rho_s, c500, R500_SI, M500_SI);
+
+    return (2.0 / (c * Sigma)) * integral; // [m/s]
+}
 
 
 int main() {
@@ -154,13 +176,13 @@ int main() {
     }
 
     //calcolo la surface density
-    std::ofstream fout("sigma_profile.dat");
+    std::ofstream fout("sigma_profile_gsl.dat");
     fout << "x_perp,Sigma_kgm2\n";
 
     double Sigma[N];
     for (int i = 0; i < N-1; i++) {
         double x_perp = r_tilde[i];  
-        double sigma_val = sigma(x_perp, rho_s, R500_SI);
+        double sigma_val = sigma(x_perp, rho_s, c500, R500_SI, M500_SI);
         fout << x_perp << "   " << sigma_val << "\n";
         Sigma[i] = sigma_val;
     }
@@ -168,14 +190,14 @@ int main() {
     fout.close();
 
     //calcolo il velocity offset di un singolo cluster
-    std::ofstream fout1("delta_single_cluster.dat");
+    std::ofstream fout1("delta_single_cluster_gsl.dat");
     fout1 << "x_perp,Delta\n";
 
     double Delta[N];
     
-    for (int i=0; i<N-1; i++) {
+    for (int i=1; i<N-1; i++) {
         double x_perp = r_tilde[i];
-        double delta_val = delta(x_perp, R500_SI, r_s_SI, phi[0], rho_s, r_s, M500_SI, c500);
+        double delta_val = delta(x_perp, R500_SI, phi[0], rho_s, M500_SI, c500);
         fout1 << x_perp << "   " << delta_val/1000 << "\n";   //il /1000 converte in Km/s
         Delta[i] = delta_val;
         Delta[0] = 0;
@@ -186,4 +208,4 @@ int main() {
     //calcolo il velocity offset per una popolazione di cluster
    
     return 0;
-}
+};
