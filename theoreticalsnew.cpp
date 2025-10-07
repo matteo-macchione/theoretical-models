@@ -274,37 +274,65 @@ int main() {
 
     fout.close();
 
-    //calcolo il velocity offset di un singolo cluster
+  // Calcolo il velocity offset di un singolo cluster con diversi modelli di gravità
     std::ofstream fout1("delta_single_cluster_gsl.dat");
-    fout1 << "x_perp,Delta\n";
+    fout1 << "# x_perp   Delta_GR(km/s)   Delta_f(R)(km/s)   Delta_DGP(km/s)\n";
 
-    double Delta[N];
-    
-    for (int i=1; i<N-1; i++) {
+    // Fattori moltiplicativi per il potenziale
+    double b = -1.15; // parametro DGP
+    double k[3] = {1.0, 4.0/3.0, 1+1/(3*b)};  // GR, f(R), DGP
+
+    // Array per salvare i risultati
+    double Delta_GR[N], Delta_fR[N], Delta_DGP[N];
+
+    // Ciclo sui raggi
+    for (int i = 1; i < N - 1; i++) {
         double x_perp = r_tilde[i];
-        double delta_val = delta(x_perp, R500_SI, phi[0], rho_s, M500_SI, c500);
-        fout1 << x_perp << "   " << delta_val/1000 << "\n";   //il /1000 converte in Km/s
-        Delta[i] = delta_val;
-        Delta[0] = 0;
+
+        // Calcolo per ciascun modello di gravità
+        double delta_GR  = delta(x_perp, R500_SI, phi[0], rho_s, M500_SI, c500) * k[0];
+        double delta_fR  = delta(x_perp, R500_SI, phi[0], rho_s, M500_SI, c500) * k[1];
+        double delta_DGP = delta(x_perp, R500_SI, phi[0], rho_s, M500_SI, c500) * k[2];
+
+        // Conversione in km/s
+        fout1 << x_perp << "   "
+          << delta_GR/1000.0 << "   "
+          << delta_fR/1000.0 << "   "
+          << delta_DGP/1000.0 << "\n";
+
+        Delta_GR[i]  = delta_GR;
+        Delta_fR[i]  = delta_fR;
+        Delta_DGP[i] = delta_DGP;
     }
 
+    // chiudo il file
     fout1.close();
+
     
     //calcolo il velocity offset per una popolazione di cluster
     std::ofstream fout2("delta_population_avg_gsl.dat");
-    fout2 << "x_perp,Delta_population_avg\n";
+    fout2 << "x_perp  Delta_population_GR  Delta_population_f(R)  Delta_population_DGP\n";
     double Mmin = 1e13; // M_sun
     double Mmax = 1e15; // M_sun
     double alpha = 0.6; // slope della funzione di massa
-    double Delta_pop[N];
+    double Delta_pop_GR[N];
+    double Delta_pop_fR[N];
+    double Delta_pop_DGP[N];
+
 
     for (int i=1; i<N-1; i++) {
         double x_perp = r_tilde[i];
-        double delta_pop_val = delta_population_avg(x_perp, Mmin, Mmax, alpha, H0, z);
-        fout2 << x_perp << "   " << delta_pop_val/1000 << "\n"; //il /1000 converte in Km/s
-        Delta_pop[i] = delta_pop_val;
-        Delta_pop[0] = 0;
+        Delta_pop_GR[i] = delta_population_avg(x_perp, Mmin, Mmax, alpha, H0, z)* k[0];
+        Delta_pop_fR[i] = delta_population_avg(x_perp, Mmin, Mmax, alpha, H0, z) * k[1];
+        Delta_pop_DGP[i] = delta_population_avg(x_perp, Mmin, Mmax, alpha, H0, z) * k[2];
+        fout2 << x_perp << "   "
+          << Delta_pop_GR[i]/1000.0 << "   "
+          << Delta_pop_fR[i]/1000.0 << "   "
+          << Delta_pop_DGP[i]/1000.0 << "\n"; //il /1000 converte in Km/s
+    
     }
+
+    fout2.close();
 
     return 0;
 };
