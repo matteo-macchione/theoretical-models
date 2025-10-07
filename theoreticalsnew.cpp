@@ -112,6 +112,91 @@ double delta(double x_perp, double R500_SI, double phi0,
     return (2.0 / (c * Sigma)) * integral; // [m/s]
 }
 
+// ---------- helper: dati cluster da M500 (M_sun) ----------
+struct ClusterParams {
+    double M500;        // M_sun
+    double M500_SI;     // kg
+    double R500_SI;     // m
+    double R500;        // Mpc
+    double c500;
+    double r_s_SI;      // m
+    double rho_s;       // kg/m^3
+    double phi0;        // m^2/s^2
+};
+
+ClusterParams params_from_M(double M500, double H0, double z) {
+    ClusterParams p;
+    p.M500 = M500;
+    p.M500_SI = M500 * M_sun;
+    double rhoc = rho_crit(H0); // [kg/m^3]
+    p.R500_SI = pow( (3.0 * p.M500_SI) / (4.0 * M_PI * 500.0 * rhoc), 1.0/3.0 );
+    p.R500 = p.R500_SI / Mpc;
+    p.c500 = c500_duffy(M500, z); // input M500 in M_sun
+    p.r_s_SI = (p.R500 / p.c500) * Mpc;
+    double factor = std::log(1.0 + p.c500) - p.c500 / (1.0 + p.c500);
+    p.rho_s = p.M500_SI / (4.0 * M_PI * pow(p.r_s_SI, 3) * factor);
+    double g500 = 1.0 / factor;
+    p.phi0 = - g500 * (G * p.M500_SI / p.R500_SI) * (std::log(1.0 + p.c500 * 1e-8) / 1e-8);
+    // use asymptotic limit phi(0) ~ -g500 * (G M500 / R500) * c500 / f_c,
+    // but the line above avoided division by 0 by using small x; better explicit:
+    p.phi0 = - g500 * (G * p.M500_SI / p.R500_SI) * ( (std::log(1.0 + p.c500) / (1e-8)) ); // temporary
+    // more robust explicit phi0 (limit x->0): log(1+c*x)/x -> c for x->0
+    p.phi0 = - g500 * (G * p.M500_SI / p.R500_SI) * p.c500; // correct limit
+    return p;
+}
+
+// ---------- wrapper che calcola Sigma fisico e Delta fisico per un M500 e x_perp ----------
+double Sigma_phys_for_M(double x_perp, const ClusterParams &p) {
+    // usa la funzione sigma_x che avevamo definito (o sigma) adattata:
+    // se hai sigma_x(x_perp, rho_s, c500, R500_SI, M500_SI)
+    return sigma(x_perp, p.rho_s, p.c500, p.R500_SI, p.M500_SI); // [kg/m^2]
+}
+
+double Delta_phys_for_M(double x_perp, const ClusterParams &p) {
+    // usa la funzione delta(x_perp, R500_SI, phi0, rho_s, M500_SI, c500)
+    return delta(x_perp, p.R500_SI, p.phi0, p.rho_s, p.M500_SI, p.c500); // [m/s]
+}
+
+// ---------- integrale su massa in variabile y = log(M) ----------
+double delta_population_avg(double x_perp, double Mmin, double Mmax, double alpha,
+                            double H0, double z) {
+    // integrale su y = ln M: M = exp(y), dM = exp(y) dy
+    double y0 = std::log(Mmin);
+    double y1 = std::log(Mmax);
+
+    auto integrand_num = [&](double y) -> double {
+        double M = std::exp(y);
+        ClusterParams p = params_from_M(M, H0, z);
+        double Sigma = Sigma_phys_for_M(x_perp, p); // kg/m^2
+        double Delta = Delta_phys_for_M(x_perp, p); // m/s
+        double weight = pow(M, -alpha); // M in M_sun
+        double dM_dy = M; // dM = M dy
+        return Sigma * Delta * weight * dM_dy; // units: (kg/m^2)*(m/s)*M_sun^{-alpha} * M_sun
+    };
+
+    auto integrand_den = [&](double y) -> double {
+        double M = std::exp(y);
+        ClusterParams p = params_from_M(M, H0, z);
+        double Sigma = Sigma_phys_for_M(x_perp, p); // kg/m^2
+        double weight = pow(M, -alpha);
+        double dM_dy = M;
+        return Sigma * weight * dM_dy; // units: kg/m^2 * M_sun^{1-alpha}
+    };
+
+    // wrapper GSL integration parameters (tolleranze moderate)
+    double epsabs = 1e-4;
+    double epsrel = 1e-4;
+    int limit_size = 2000;
+    int rule = 6;
+
+    double num = wrapper::gsl::GSL_integrate_qag(integrand_num, y0, y1, epsabs, epsrel, limit_size, rule);
+    double den = wrapper::gsl::GSL_integrate_qag(integrand_den, y0, y1, epsabs, epsrel, limit_size, rule);
+
+    if (den == 0.0) return 0.0;
+    return num / den; // result in [m/s]
+}
+
+
 
 int main() {
     int N = 1000;
@@ -206,6 +291,20 @@ int main() {
     fout1.close();
     
     //calcolo il velocity offset per una popolazione di cluster
-   
+    std::ofstream fout2("delta_population_avg_gsl.dat");
+    fout2 << "x_perp,Delta_population_avg\n";
+    double Mmin = 1e13; // M_sun
+    double Mmax = 1e15; // M_sun
+    double alpha = 0.6; // slope della funzione di massa
+    double Delta_pop[N];
+
+    for (int i=1; i<N-1; i++) {
+        double x_perp = r_tilde[i];
+        double delta_pop_val = delta_population_avg(x_perp, Mmin, Mmax, alpha, H0, z);
+        fout2 << x_perp << "   " << delta_pop_val/1000 << "\n"; //il /1000 converte in Km/s
+        Delta_pop[i] = delta_pop_val;
+        Delta_pop[0] = 0;
+    }
+
     return 0;
 };
