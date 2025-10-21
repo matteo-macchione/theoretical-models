@@ -4,18 +4,18 @@
 
 # Compilatore
 CXX = g++
-CXXFLAGS = -O2 -std=c++11 -Wall -Wextra
+CXXFLAGS = -O2 -std=c++11 -Wall -Wextra -fopenmp
 
 # Percorsi include
 INCLUDES = \
-    -I/home/matteo/CosmoBolognaLib-master/Headers \
-    -I/home/matteo/CosmoBolognaLib-master/External/Eigen/eigen-3.4.0
+    -I/home/matteo/CosmoBolognaLib/Headers \
+    -I/home/matteo/CosmoBolognaLib/External/Eigen/eigen-3.4.0
 
 # Percorsi librerie
-LIBPATH = -L/home/matteo/CosmoBolognaLib-master
+LIBPATH = -L/home/matteo/CosmoBolognaLib
 
 # Librerie da linkare
-LIBS = -lCOSM -lFUNC -lFUNCGRID -lWRAP_LIB -lgsl -lgslcblas -lm
+LIBS = -lCOSM -lFUNC -lFUNCGRID -lWRAP_LIB -lgsl -lgslcblas -lm -fopenmp
 
 # Nome eseguibile
 TARGET = theoreticalsnew
